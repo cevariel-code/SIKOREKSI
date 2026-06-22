@@ -1,0 +1,6 @@
+{
+  "name": "Koreksi PG dan Analisis Soal",
+  "description": "Aplikasi koreksi otomatis 40 PG, analisis butir soal tingkat kesulitan dan mutu pengecoh, multi-kelas, serta cetak laporan.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
