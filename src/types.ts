@@ -23,3 +23,27 @@ export interface FormulaReference {
   formulaIDN: string;
   formulaUS: string;
 }
+
+export interface License {
+  id: string;
+  email: string;
+  token: string;
+  status: "active" | "inactive";
+  used: boolean;
+  expired_at: string;
+  created_at: string;
+}
+
+export interface UserProfile {
+  id: string;
+  email: string;
+  full_name: string;
+  school_name: string;
+  created_at: string;
+}
+
+export type AuthSession =
+  | { type: "none" }
+  | { type: "admin"; id: string; email: string; name: string }
+  | { type: "user"; id: string; email: string; name: string; school_name: string; token?: string };
+

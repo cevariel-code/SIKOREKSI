@@ -2,10 +2,11 @@ import React, { useState, useEffect } from "react";
 import { 
   BarChart2, Award, Clipboard, Printer, BookOpen, Settings, Sliders, 
   Plus, Trash2, Heart, FolderHeart, Save, Download, Upload, Info,
-  BookMarked, HelpCircle, FileSpreadsheet, Layers, Sparkles, Check, ChevronRight, X
+  BookMarked, HelpCircle, FileSpreadsheet, Layers, Sparkles, Check, ChevronRight, X,
+  LogOut, Shield, UserCheck
 } from "lucide-react";
 
-import { AppClass, Student } from "./types";
+import { AppClass, Student, AuthSession } from "./types";
 import { formulaReferences, stepByStepGuides, sampleKeys, initialStudentsDraft } from "./helpData";
 
 // Extracted Subcomponents
@@ -14,6 +15,11 @@ import AnswerKeyEditor from "./components/AnswerKeyEditor";
 import StudentList from "./components/StudentList";
 import MatrixGrid from "./components/MatrixGrid";
 import PrintableReport from "./components/PrintableReport";
+
+import LoginScreen from "./components/LoginScreen";
+import AdminPanel from "./components/AdminPanel";
+import LicenseDashboard from "./components/LicenseDashboard";
+import { supabase, isSupabaseConfigured } from "./lib/supabase";
 
 const LOCAL_STORAGE_KEY = "abs_analisis_otomatis_multiclass_db";
 
@@ -24,6 +30,29 @@ export default function App() {
   const [showNewClassModal, setShowNewClassModal] = useState(false);
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
 
+  // Session / Authentication state
+  const [authSession, setAuthSession] = useState<AuthSession>(() => {
+    try {
+      const saved = localStorage.getItem("abs_auth_session");
+      if (saved) {
+        return JSON.parse(saved) as AuthSession;
+      }
+    } catch (e) {
+      console.error("Failed to recover auth session", e);
+    }
+    return { type: "none" };
+  });
+
+  const handleLoginSuccess = (session: AuthSession) => {
+    setAuthSession(session);
+    localStorage.setItem("abs_auth_session", JSON.stringify(session));
+  };
+
+  const handleLogout = () => {
+    setAuthSession({ type: "none" });
+    localStorage.removeItem("abs_auth_session");
+  };
+
   // New class form fields
   const [newClassName, setNewClassName] = useState("");
   const [newSchoolName, setNewSchoolName] = useState("");
@@ -31,52 +60,134 @@ export default function App() {
   const [newTeacherName, setNewTeacherName] = useState("");
   const [newExamName, setNewExamName] = useState("");
 
-  // INITIAL STATE SEEDING
+  // LOAD & SYNC CLASSES FROM SUPABASE FOR ACTIVE USER
   useEffect(() => {
-    try {
-      const data = localStorage.getItem(LOCAL_STORAGE_KEY);
-      if (data) {
-        const parsed = JSON.parse(data) as AppClass[];
-        if (parsed && parsed.length > 0) {
-          setClasses(parsed);
-          setSelectedClassId(parsed[0].id);
+    if (authSession.type !== "user") return;
+
+    const loadUserData = async () => {
+      try {
+        if (!supabase || !isSupabaseConfigured) {
+          // Fallback to local storage for simulated/demo users
+          const localData = localStorage.getItem(`${LOCAL_STORAGE_KEY}_${authSession.id}`);
+          if (localData) {
+            const parsed = JSON.parse(localData) as AppClass[];
+            if (parsed && parsed.length > 0) {
+              setClasses(parsed);
+              setSelectedClassId(parsed[0].id);
+              return;
+            }
+          }
+          
+          // Seed fallback data if local storage empty
+          const seedClass: AppClass = {
+            id: `seed-class-pas-${authSession.id}`,
+            className: "Bahasa Indonesia / XI-A",
+            schoolName: authSession.school_name || "SMA Negeri 1 Jakarta",
+            passingGrade: 75,
+            teacherName: authSession.name || "Drs. Siswanto, M.Pd.",
+            examName: "Penilaian Akhir Semester (PAS) Ganjil",
+            examDate: new Date().toISOString().split("T")[0],
+            answerKey: [...sampleKeys],
+            students: initialStudentsDraft.filter(s => s.name.trim() !== "").map(s => ({
+              id: s.id,
+              name: s.name,
+              answers: [...s.answers]
+            }))
+          };
+          const initialList = [seedClass];
+          setClasses(initialList);
+          setSelectedClassId(seedClass.id);
+          localStorage.setItem(`${LOCAL_STORAGE_KEY}_${authSession.id}`, JSON.stringify(initialList));
           return;
         }
-      }
-    } catch (e) {
-      console.error("Local storage retrieval failed", e);
-    }
 
-    // Default Seed Class representing a real Indonesian School Examination
-    const seedClass: AppClass = {
-      id: "seed-class-pas-xi-a",
-      className: "Bahasa Indonesia / XI-A",
-      schoolName: "SMA Negeri 1 Jakarta",
-      passingGrade: 75,
-      teacherName: "Drs. Siswanto, M.Pd.",
-      examName: "Penilaian Akhir Semester (PAS) Ganjil",
-      examDate: new Date().toISOString().split("T")[0],
-      answerKey: [...sampleKeys],
-      students: initialStudentsDraft.filter(s => s.name.trim() !== "").map(s => ({
-        id: s.id,
-        name: s.name,
-        answers: [...s.answers]
-      }))
+        const { data: profile, error } = await supabase
+          .from("profiles")
+          .select("classes")
+          .eq("id", authSession.id)
+          .maybeSingle();
+
+        if (error) {
+          console.error("Gagal memuat data kelas dari cloud:", error);
+          return;
+        }
+
+        if (profile && Array.isArray(profile.classes) && profile.classes.length > 0) {
+          setClasses(profile.classes);
+          setSelectedClassId(profile.classes[0].id);
+        } else {
+          // Default Seed Class representing a real Indonesian School Examination
+          const seedClass: AppClass = {
+            id: "seed-class-pas-xi-a",
+            className: "Bahasa Indonesia / XI-A",
+            schoolName: authSession.school_name || "SMA Negeri 1 Jakarta",
+            passingGrade: 75,
+            teacherName: authSession.name || "Drs. Siswanto, M.Pd.",
+            examName: "Penilaian Akhir Semester (PAS) Ganjil",
+            examDate: new Date().toISOString().split("T")[0],
+            answerKey: [...sampleKeys],
+            students: initialStudentsDraft.filter(s => s.name.trim() !== "").map(s => ({
+              id: s.id,
+              name: s.name,
+              answers: [...s.answers]
+            }))
+          };
+
+          const initialList = [seedClass];
+          setClasses(initialList);
+          setSelectedClassId(seedClass.id);
+
+          // Seed back to cloud
+          await supabase
+            .from("profiles")
+            .update({ classes: initialList })
+            .eq("id", authSession.id);
+        }
+      } catch (err) {
+        console.error("Kesalahan koneksi saat memuat kelas:", err);
+      }
     };
 
-    const initialClassesList = [seedClass];
-    setClasses(initialClassesList);
-    setSelectedClassId(seedClass.id);
-    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(initialClassesList));
-  }, []);
+    loadUserData();
+  }, [authSession]);
 
-  // Save changes to localStorage on state changes
-  const saveClassesToLocalStorage = (nextClasses: AppClass[]) => {
+  // Save changes to Supabase cloud profile instead of localStorage
+  const saveClassesToLocalStorage = async (nextClasses: AppClass[]) => {
     setClasses(nextClasses);
-    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(nextClasses));
+    
+    // Always backup to localStorage for fast loading and fallback
+    localStorage.setItem(`${LOCAL_STORAGE_KEY}_${authSession.id}`, JSON.stringify(nextClasses));
+
+    if (authSession.type === "user" && isSupabaseConfigured && supabase) {
+      try {
+        const { error } = await supabase
+          .from("profiles")
+          .update({ classes: nextClasses })
+          .eq("id", authSession.id);
+
+        if (error) {
+          console.error("Gagal menyimpan data kelas ke cloud:", error.message);
+        }
+      } catch (err) {
+        console.error("Gagal menghubungkan ke cloud untuk menyimpan data kelas:", err);
+      }
+    }
   };
 
   // Find active classroom
+  if (authSession.type === "none") {
+    return <LoginScreen onLoginSuccess={handleLoginSuccess} />;
+  }
+
+  if (authSession.type === "admin") {
+    return (
+      <AdminPanel 
+        onLogout={handleLogout} 
+        onEnterApp={() => setAuthSession({ type: "user", name: "Administrator", email: "cevariel@gmail.com", token: "ADMIN-SESSION" })} 
+      />
+    );
+  }
+
   const activeClass = classes.find(c => c.id === selectedClassId) || classes[0];
 
   if (!activeClass) {
@@ -295,7 +406,7 @@ export default function App() {
     <div className="min-h-screen bg-[#f1f5f9] flex flex-col font-sans relative">
       
       {/* 1. Header Toolbar */}
-      <header className="no-print bg-slate-900 border-b border-black text-white py-3 px-4 md:px-6 flex flex-col sm:flex-row justify-between items-center gap-3 shadow-md z-40">
+      <header className="no-print bg-slate-900 border-b border-black text-white py-3 px-4 md:px-6 flex flex-col xl:flex-row justify-between items-center gap-3 shadow-md z-40">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded bg-gradient-to-tr from-blue-600 to-indigo-700 flex items-center justify-center font-black text-sm text-white shadow-inner">
             PG
@@ -309,11 +420,33 @@ export default function App() {
           </div>
         </div>
 
-        {/* Action Backup row */}
-        <div className="flex items-center gap-2 text-xs">
+        {/* Action Backup & User state row */}
+        <div className="flex flex-wrap items-center justify-center xl:justify-end gap-2.5 text-xs">
+          {/* User info badge */}
+          {authSession.type === "user" && (
+            <div className="flex items-center gap-2 bg-slate-950/60 px-3 py-1.5 rounded-lg border border-slate-800 text-[11px] font-bold">
+              <UserCheck className="w-3.5 h-3.5 text-blue-400" />
+              <div className="text-left leading-none">
+                <span className="text-[8px] text-slate-500 block uppercase font-black">Aktif Sebagai</span>
+                <span className="text-white text-[11px] font-black">{authSession.name}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Return to Admin Link */}
+          {authSession.type === "user" && authSession.token === "ADMIN-SESSION" && (
+            <button
+              onClick={() => setAuthSession({ type: "admin" })}
+              className="flex items-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white font-black px-2.5 py-1.5 rounded text-[11px] transition-all"
+            >
+              <Shield className="w-3.5 h-3.5" />
+              Kembali ke Panel Admin
+            </button>
+          )}
+
           <label className="flex items-center gap-1 bg-slate-800 border border-slate-700 font-bold px-2.5 py-1.5 rounded hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer text-[11px]">
             <Upload className="w-3.5 h-3.5" />
-            <span>Unggah Backup (.json)</span>
+            <span>Unggah Backup</span>
             <input type="file" accept=".json" onChange={handleImportBackup} className="hidden" />
           </label>
           <button
@@ -321,7 +454,17 @@ export default function App() {
             className="flex items-center gap-1 bg-blue-700 border border-blue-650 font-bold px-2.5 py-1.5 rounded hover:bg-blue-800 text-white transition-all text-[11px]"
           >
             <Download className="w-3.5 h-3.5" />
-            cadangkan Data (.json)
+            Cadangkan Data (.json)
+          </button>
+
+          {/* Logout / Keluar */}
+          <button
+            onClick={handleLogout}
+            className="flex items-center gap-1.5 bg-slate-800/80 hover:bg-red-900 border border-slate-700 font-bold px-2.5 py-1.5 rounded text-slate-300 hover:text-white transition-all text-[11px]"
+            title="Keluar dari Sesi Anda"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            Keluar
           </button>
         </div>
       </header>
@@ -330,7 +473,7 @@ export default function App() {
       <div className="flex-1 flex flex-col lg:flex-row relative">
         
         {/* LEFT SIDEBAR CONTROLS */}
-        <aside className="no-print w-full lg:w-76 xl:w-80 bg-slate-850 border-r border-slate-900 text-slate-300 p-4 shrink-0 flex flex-col justify-between">
+        <aside className="no-print w-full lg:w-76 xl:w-80 bg-slate-900 border-r border-slate-950 text-slate-100 p-4 shrink-0 flex flex-col justify-between">
           
           <div className="space-y-6">
             
@@ -340,7 +483,7 @@ export default function App() {
                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">PILIH KELAS / UJIAN</label>
                 <button
                   onClick={() => setShowNewClassModal(true)}
-                  className="text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-bold text-[11px]"
+                  className="text-emerald-450 hover:text-emerald-350 flex items-center gap-1 font-bold text-[11px]"
                   title="Klik untuk membuat kelas / ujian penugasan baru"
                 >
                   <Plus className="w-3.5 h-3.5" /> Buat Baru
@@ -350,7 +493,7 @@ export default function App() {
                 <select
                   value={selectedClassId}
                   onChange={(e) => setSelectedClassId(e.target.value)}
-                  className="w-full p-2 border border-slate-700 bg-slate-900 rounded focus:border-blue-500 font-extrabold text-xs text-white"
+                  className="w-full p-2 border border-slate-700 bg-slate-950 rounded focus:border-blue-500 font-extrabold text-xs text-white"
                 >
                   {classes.map(c => (
                     <option key={c.id} value={c.id}>
@@ -372,11 +515,11 @@ export default function App() {
             <div className="h-px bg-slate-800" />
 
             {/* Config metadata fields card */}
-            <div className="space-y-3.5 bg-slate-900/40 border border-slate-800/40 rounded p-3">
+            <div className="space-y-3.5 bg-slate-950/60 border border-slate-800 rounded p-3.5">
               <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">IDENTITAS ASESMEN</span>
               
               <div className="space-y-1">
-                <label className="block text-[9px] font-bold text-slate-450 uppercase">Nama Satuan Sekolah</label>
+                <label className="block text-[10px] font-bold text-slate-300 uppercase">Nama Satuan Sekolah</label>
                 <input
                   type="text"
                   value={activeClass.schoolName}
@@ -386,7 +529,7 @@ export default function App() {
               </div>
 
               <div className="space-y-1">
-                <label className="block text-[9px] font-bold text-slate-450 uppercase">Mata Pelajaran / Kelas</label>
+                <label className="block text-[10px] font-bold text-slate-300 uppercase">Mata Pelajaran / Kelas</label>
                 <input
                   type="text"
                   value={activeClass.className}
@@ -397,7 +540,7 @@ export default function App() {
 
               <div className="grid grid-cols-2 gap-2">
                 <div className="space-y-1">
-                  <label className="block text-[9px] font-bold text-slate-450 uppercase">KKTP / Kelulusan</label>
+                  <label className="block text-[10px] font-bold text-slate-300 uppercase">KKTP / Kelulusan</label>
                   <input
                     type="number"
                     min={1}
@@ -408,7 +551,7 @@ export default function App() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="block text-[9px] font-bold text-slate-450 uppercase">Tanggal Ujian</label>
+                  <label className="block text-[10px] font-bold text-slate-300 uppercase">Tanggal Ujian</label>
                   <input
                     type="date"
                     value={activeClass.examDate || ""}
@@ -419,7 +562,7 @@ export default function App() {
               </div>
 
               <div className="space-y-1">
-                <label className="block text-[9px] font-bold text-slate-450 uppercase">Guru Penilai (Mata Pelajaran)</label>
+                <label className="block text-[10px] font-bold text-slate-300 uppercase">Guru Penilai (Mata Pelajaran)</label>
                 <input
                   type="text"
                   value={activeClass.teacherName || ""}
@@ -430,7 +573,7 @@ export default function App() {
               </div>
 
               <div className="space-y-1">
-                <label className="block text-[9px] font-bold text-slate-450 uppercase">Nama Ujian / Ulangan</label>
+                <label className="block text-[10px] font-bold text-slate-300 uppercase">Nama Ujian / Ulangan</label>
                 <input
                   type="text"
                   value={activeClass.examName || ""}
@@ -448,88 +591,106 @@ export default function App() {
               
               <button
                 onClick={() => setActiveTab("dashboard")}
-                className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded transition-colors ${
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-bold rounded transition-all ${
                   activeTab === "dashboard"
-                    ? "bg-blue-650 text-white font-extrabold"
-                    : "text-slate-300 hover:bg-slate-800"
+                    ? "bg-blue-600 text-white shadow-sm"
+                    : "text-slate-300 hover:bg-slate-800 hover:text-white"
                 }`}
               >
                 <span className="flex items-center gap-2">
-                  <BarChart2 className="w-3.5 h-3.5" /> Dasbor Analisis Butir
+                  <BarChart2 className="w-3.5 h-3.5 text-blue-400" /> Dasbor Analisis Butir
                 </span>
                 <ChevronRight className="w-3 h-3 opacity-55" />
               </button>
 
               <button
                 onClick={() => setActiveTab("student_list")}
-                className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded transition-colors ${
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-bold rounded transition-all ${
                   activeTab === "student_list"
-                    ? "bg-blue-650 text-white font-extrabold"
-                    : "text-slate-300 hover:bg-slate-800"
+                    ? "bg-blue-600 text-white shadow-sm"
+                    : "text-slate-300 hover:bg-slate-800 hover:text-white"
                 }`}
               >
                 <span className="flex items-center gap-2">
-                  <Sliders className="w-3.5 h-3.5" /> Isi Jawaban Siswa
+                  <Sliders className="w-3.5 h-3.5 text-amber-400" /> Isi Jawaban Siswa
                 </span>
-                <span className="text-[10px] bg-slate-800 px-1.5 rounded font-mono font-bold">
+                <span className={`text-[10px] px-2 py-0.5 rounded font-mono font-black ${
+                  activeTab === "student_list" ? "bg-blue-700 text-white" : "bg-slate-800 text-slate-200"
+                }`}>
                   {activeClass.students.filter(s => s.name.trim() !== "").length}
                 </span>
               </button>
 
               <button
                 onClick={() => setActiveTab("kunci_jawaban")}
-                className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded transition-colors ${
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-bold rounded transition-all ${
                   activeTab === "kunci_jawaban"
-                    ? "bg-blue-650 text-white font-extrabold"
-                    : "text-slate-300 hover:bg-slate-800"
+                    ? "bg-blue-600 text-white shadow-sm"
+                    : "text-slate-300 hover:bg-slate-800 hover:text-white"
                 }`}
               >
                 <span className="flex items-center gap-2">
-                  <Clipboard className="w-3.5 h-3.5" /> Kunci Jawaban
+                  <Clipboard className="w-3.5 h-3.5 text-emerald-400" /> Kunci Jawaban
                 </span>
-                <span className="text-[10px] bg-slate-800 px-1.5 rounded font-mono font-bold">
+                <span className={`text-[10px] px-2 py-0.5 rounded font-mono font-black ${
+                  activeTab === "kunci_jawaban" ? "bg-blue-700 text-white" : "bg-slate-800 text-slate-200"
+                }`}>
                   {activeClass.answerKey.filter(k => k !== "").length}/40
                 </span>
               </button>
 
               <button
                 onClick={() => setActiveTab("matrix")}
-                className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded transition-colors ${
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-bold rounded transition-all ${
                   activeTab === "matrix"
-                    ? "bg-blue-650 text-white font-extrabold"
-                    : "text-slate-300 hover:bg-slate-800"
+                    ? "bg-blue-600 text-white shadow-sm"
+                    : "text-slate-300 hover:bg-slate-800 hover:text-white"
                 }`}
               >
                 <span className="flex items-center gap-2">
-                  <Layers className="w-3.5 h-3.5" /> Grid Matriks Lengkap
+                  <Layers className="w-3.5 h-3.5 text-pink-400" /> Grid Matriks Lengkap
                 </span>
                 <ChevronRight className="w-3 h-3 opacity-55" />
               </button>
 
               <button
                 onClick={() => setActiveTab("print_report")}
-                className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded transition-colors ${
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-bold rounded transition-all ${
                   activeTab === "print_report"
-                    ? "bg-blue-650 text-white font-extrabold"
-                    : "text-slate-300 hover:bg-slate-800"
+                    ? "bg-blue-600 text-white shadow-sm"
+                    : "text-slate-300 hover:bg-slate-800 hover:text-white"
                 }`}
               >
                 <span className="flex items-center gap-2">
-                  <Printer className="w-3.5 h-3.5" /> Laporan Kelompok (Cetak)
+                  <Printer className="w-3.5 h-3.5 text-cyan-400" /> Laporan Kelompok (Cetak)
                 </span>
                 <ChevronRight className="w-3 h-3 opacity-55" />
               </button>
 
               <button
                 onClick={() => setActiveTab("excel_blueprint")}
-                className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded transition-colors ${
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-bold rounded transition-all ${
                   activeTab === "excel_blueprint"
-                    ? "bg-blue-650 text-white font-extrabold"
-                    : "text-slate-300 hover:bg-slate-800"
+                    ? "bg-blue-600 text-white shadow-sm"
+                    : "text-slate-300 hover:bg-slate-800 hover:text-white"
                 }`}
               >
                 <span className="flex items-center gap-2">
-                  <FileSpreadsheet className="w-3.5 h-3.5" /> Cetak Biru Excel / Rumus
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-teal-400" /> Cetak Biru Excel / Rumus
+                </span>
+                <ChevronRight className="w-3 h-3 opacity-55" />
+              </button>
+
+              <button
+                onClick={() => setActiveTab("license_dashboard")}
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-bold rounded transition-all ${
+                  activeTab === "license_dashboard"
+                    ? "bg-blue-600 text-white shadow-sm"
+                    : "text-slate-300 hover:bg-slate-800 hover:text-white"
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <Award className="w-3.5 h-3.5 text-indigo-400" /> Informasi Lisensi Cloud
                 </span>
                 <ChevronRight className="w-3 h-3 opacity-55" />
               </button>
@@ -708,6 +869,10 @@ export default function App() {
                   </div>
 
                 </div>
+              )}
+
+              {activeTab === "license_dashboard" && (
+                <LicenseDashboard authSession={authSession} />
               )}
             </div>
 
